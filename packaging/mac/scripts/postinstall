@@ -1,0 +1,7 @@
+#!/bin/bash
+# Make sure macOS notices the new Audio Unit and does not quarantine it.
+xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/Components/ClaudeTune.component 2>/dev/null || true
+xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/VST3/ClaudeTune.vst3 2>/dev/null || true
+xattr -dr com.apple.quarantine /Applications/ClaudeTune.app 2>/dev/null || true
+killall -9 AudioComponentRegistrar 2>/dev/null || true
+exit 0

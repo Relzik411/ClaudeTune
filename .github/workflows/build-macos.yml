@@ -1,0 +1,80 @@
+name: Build ClaudeTune for macOS
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Configure (universal binary, Apple Silicon + Intel)
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build
+        run: |
+          cmake --build build --config Release -j 4 \
+            --target ClaudeTune_VST3 ClaudeTune_AU ClaudeTune_Standalone ClaudeTuneEngineTests
+
+      - name: Run engine tests
+        run: ./build/ClaudeTuneEngineTests
+
+      - name: Collect and sign bundles (ad-hoc)
+        run: |
+          ART=build/ClaudeTune_artefacts/Release
+          mkdir -p stage/vst3 stage/au stage/app
+          cp -R "$ART/VST3/ClaudeTune.vst3" stage/vst3/
+          cp -R "$ART/AU/ClaudeTune.component" stage/au/
+          cp -R "$ART/Standalone/ClaudeTune.app" stage/app/
+          for b in stage/vst3/ClaudeTune.vst3 stage/au/ClaudeTune.component stage/app/ClaudeTune.app; do
+            codesign --force --deep --sign - "$b"
+          done
+
+      - name: Validate Audio Unit
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R stage/au/ClaudeTune.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 2
+          auval -v aumf CTun Cltn
+
+      - name: Build installer (.pkg)
+        run: |
+          VERSION=1.0.0
+          chmod +x packaging/mac/scripts/postinstall
+          pkgbuild --root stage/vst3 --install-location /Library/Audio/Plug-Ins/VST3 \
+                   --identifier com.claudetune.ClaudeTune.vst3 --version $VERSION ClaudeTune-VST3.pkg
+          pkgbuild --root stage/au --install-location /Library/Audio/Plug-Ins/Components \
+                   --scripts packaging/mac/scripts \
+                   --identifier com.claudetune.ClaudeTune.au --version $VERSION ClaudeTune-AU.pkg
+          pkgbuild --root stage/app --install-location /Applications \
+                   --identifier com.claudetune.ClaudeTune.app --version $VERSION ClaudeTune-App.pkg
+          productbuild --distribution packaging/mac/distribution.xml --package-path . \
+                       --resources packaging/mac/resources "ClaudeTune-$VERSION-macOS.pkg"
+          mkdir -p dist
+          mv "ClaudeTune-$VERSION-macOS.pkg" dist/
+          (cd stage && zip -qry "../dist/ClaudeTune-$VERSION-macOS-bundles.zip" vst3 au app)
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeTune-macOS
+          path: dist/*
+
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
