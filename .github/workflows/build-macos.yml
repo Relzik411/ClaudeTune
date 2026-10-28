@@ -6,6 +6,9 @@ on:
     tags: [ 'v*' ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   macos:
     runs-on: macos-14
@@ -68,6 +71,8 @@ jobs:
           (cd stage && zip -qry "../dist/ClaudeTune-$VERSION-macOS-bundles.zip" vst3 au app)
 
       - name: Upload installer
+        # Artifact storage can hit the account quota; releases are unaffected.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ClaudeTune-macOS
