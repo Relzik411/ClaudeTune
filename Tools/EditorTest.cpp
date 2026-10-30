@@ -578,6 +578,71 @@ int main()
         check (! noteById (n.id).hasTimingEdit(), "Delete (reset) restores the note's timing too");
     }
 
+    // ---- 25. the play marker follows Logic; the header's Play button plays in ClaudeTune ----------------
+    {
+        auto& transport = page.getTransport();
+        const juce::int64 parked = (juce::int64) (3.0 * sr);
+        runBlocks (1, false, parked, nullptr);          // Logic stopped, playhead moved to 3.0 s
+        pump();
+        const bool follows = std::abs (editor.getCursorSeconds() - 3.0) < 1e-6;
+
+        transport.getPlayButton().triggerClick();
+        pump();
+        const bool started = session.isPreviewing();
+        runBlocks (10, false, parked, nullptr);
+        pump();
+        const auto pos = session.previewPosition();
+        const bool fromMarker = pos > parked && pos < parked + 11 * 512;
+        const bool saysPlaying = transport.getStateText() == "Playing in ClaudeTune";
+
+        // clicking the ruler while it plays jumps there
+        const auto ruler = editor.getRulerArea();
+        const float x = ruler.getX() + ruler.getWidth() * 0.2f;
+        mouse.click ({ x, ruler.getCentreY() });
+        runBlocks (2, false, parked, nullptr);
+        const double jumpTo = editor.getCursorSeconds();
+        const auto pos2 = session.previewPosition();
+        const bool jumped = session.isPreviewing() && pos2 >= (int64_t) (jumpTo * sr) && pos2 < (int64_t) (jumpTo * sr) + 3 * 512;
+
+        transport.getPlayButton().triggerClick();
+        pump();
+        runBlocks (2, false, parked, nullptr);
+        check (follows && started && fromMarker && saysPlaying && jumped && ! session.isPreviewing(),
+               "the teal marker follows Logic's playhead; Play starts/stops from it; a ruler click jumps while playing");
+
+        // Space plays too, in hosts that pass it to the plug-in
+        editor.keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
+        const bool spacePlays = session.isPreviewing();
+        editor.keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
+        runBlocks (2, false, parked, nullptr);
+        check (spacePlays && ! session.isPreviewing(), "Space starts and stops it as well (where the host allows)");
+
+        // Logic playing: Play is disabled and says why
+        runBlocks (2, true, parked, &timeline);
+        pump();
+        const bool disabled = ! transport.getPlayButton().isEnabled() && transport.getStateText() == "Logic is playing";
+        runBlocks (1, false, parked, nullptr);
+        pump();
+        check (disabled && transport.getPlayButton().isEnabled(), "while Logic plays, ClaudeTune's Play steps aside");
+    }
+
+    // ---- 26. the hint line says what the mouse would do ------------------------------------------------
+    {
+        editor.setTool (ui::NoteEditor::Tool::Select);
+        auto hintAt = [&] (juce::Point<float> p) {
+            editor.mouseMove (mouse.make (p, {}, 0, false));
+            return editor.getHintText();
+        };
+        const auto r = editor.getNoteBounds (notes0[6].id);
+        const bool body = hintAt (r.getCentre()).contains ("retune");
+        const bool edge = hintAt ({ r.getRight() - 2.0f, r.getCentreY() }).contains ("stretch");
+        const bool ruler = hintAt (editor.getRulerArea().getCentre()).contains ("plays from");
+        editor.setTool (ui::NoteEditor::Tool::Split);
+        const bool split = hintAt (r.getCentre()).contains ("cut");
+        editor.setTool (ui::NoteEditor::Tool::Select);
+        check (body && edge && ruler && split, "the hint line explains notes, edges, the ruler and the current tool");
+    }
+
     // render a typical edit for the screenshot: everything corrected, two notes moved later in time,
     // one note stretched, the moved pair selected
     const auto allowed = proc.getAllowedNotes();
@@ -589,6 +654,12 @@ int main()
     });
     pump();
     editor.setSelection ({ notes0[4].id, notes0[5].id });
+    {
+        // play marker a little way in (Logic is parked at 3.0 s), mouse over a note
+        const auto ruler = editor.getRulerArea();
+        mouse.click ({ ruler.getX() + ruler.getWidth() * 0.18f, ruler.getCentreY() });
+        editor.mouseMove (mouse.make (editor.getNoteBounds (notes0[3].id).getCentre(), {}, 0, false));
+    }
     pump (100);
     auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
     juce::File out = juce::File::getCurrentWorkingDirectory().getChildFile ("editor_test.png");
