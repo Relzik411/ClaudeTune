@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>ClaudeTune 1.0</title>
+    <title>ClaudeTune 2 preview</title>
     <welcome file="welcome.html" mime-type="text/html"/>
     <options customize="allow" require-scripts="false" hostArchitectures="arm64,x86_64"/>
     <domains enable_localSystem="true"/>
@@ -21,7 +21,7 @@
         <pkg-ref id="com.claudetune.ClaudeTune.app"/>
     </choice>
 
-    <pkg-ref id="com.claudetune.ClaudeTune.vst3" version="1.0.0" onConclusion="none">ClaudeTune-VST3.pkg</pkg-ref>
-    <pkg-ref id="com.claudetune.ClaudeTune.au" version="1.0.0" onConclusion="none">ClaudeTune-AU.pkg</pkg-ref>
-    <pkg-ref id="com.claudetune.ClaudeTune.app" version="1.0.0" onConclusion="none">ClaudeTune-App.pkg</pkg-ref>
+    <pkg-ref id="com.claudetune.ClaudeTune.vst3" version="1.9.0" onConclusion="none">ClaudeTune-VST3.pkg</pkg-ref>
+    <pkg-ref id="com.claudetune.ClaudeTune.au" version="1.9.0" onConclusion="none">ClaudeTune-AU.pkg</pkg-ref>
+    <pkg-ref id="com.claudetune.ClaudeTune.app" version="1.9.0" onConclusion="none">ClaudeTune-App.pkg</pkg-ref>
 </installer-gui-script>

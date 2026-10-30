@@ -21,10 +21,12 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="$ARCH"
 
 echo "==> Building (the first build downloads JUCE and takes a few minutes)"
 cmake --build build --config Release -j "$(sysctl -n hw.ncpu)" \
-  --target ClaudeTune_VST3 ClaudeTune_AU ClaudeTune_Standalone ClaudeTuneEngineTests
+  --target ClaudeTune_VST3 ClaudeTune_AU ClaudeTune_Standalone ClaudeTuneEngineTests ClaudeTuneEditTests ClaudeTuneSessionTests
 
-echo "==> Running engine tests"
+echo "==> Running tests"
 ./build/ClaudeTuneEngineTests
+./build/ClaudeTuneEditTests
+./build/ClaudeTuneSessionTests
 
 ART=build/ClaudeTune_artefacts/Release
 VST3_DIR="$HOME/Library/Audio/Plug-Ins/VST3"

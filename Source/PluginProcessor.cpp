@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "SessionCodec.h"
 
 using namespace claudetune;
 
@@ -44,6 +45,9 @@ namespace
     {
         return juce::String (noteName (note, false)) + juce::String (note / 12 - 1);
     }
+
+    // Plug-in state: "CTN2" | xml length | xml | session length | session
+    constexpr char kStateMagic[4] = { 'C', 'T', 'N', '2' };
 }
 
 //==============================================================================
@@ -115,6 +119,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout ClaudeTuneProcessor::createL
             .withStringFromValueFunction ([] (float v, int) { return (v > 0.04f ? "+" : "") + String (v, 1) + " dB"; })
             .withValueFromStringFunction (numberFromText)));
 
+    // ---- Edit mode ----------------------------------------------------------
+    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::mode, 2 }, "Mode",
+                                                         StringArray { "Live", "Edit" }, 0,
+                                                         AudioParameterChoiceAttributes().withAutomatable (false)));
+    auto pctAttr = AudioParameterFloatAttributes()
+                       .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + "%"; })
+                       .withValueFromStringFunction (numberFromText);
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::editCenter, 2 }, "Edit Center",
+                                                        NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f, pctAttr));
+    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::editVariation, 2 }, "Edit Variation",
+                                                        NormalisableRange<float> (0.0f, 200.0f, 1.0f), 100.0f, pctAttr));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::editBypass, 2 }, "Compare Original", false));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::editLock, 2 }, "Lock Capture", false,
+                                                       AudioParameterBoolAttributes().withAutomatable (false)));
+
     return { p.begin(), p.end() };
 }
 
@@ -140,11 +159,15 @@ ClaudeTuneProcessor::ClaudeTuneProcessor()
     raw.refTone      = apvts.getRawParameterValue (ParamIDs::refTone);
     raw.targetPitch  = apvts.getRawParameterValue (ParamIDs::targetPitch);
     raw.refToneLevel = apvts.getRawParameterValue (ParamIDs::refToneLevel);
+    raw.mode         = apvts.getRawParameterValue (ParamIDs::mode);
+    raw.editBypass   = apvts.getRawParameterValue (ParamIDs::editBypass);
+    raw.editLock     = apvts.getRawParameterValue (ParamIDs::editLock);
 
     rebuildScale();
 
     apvts.addParameterListener (ParamIDs::root, this);
     apvts.addParameterListener (ParamIDs::scale, this);
+    apvts.addParameterListener (ParamIDs::mode, this);
 }
 
 ClaudeTuneProcessor::~ClaudeTuneProcessor()
@@ -152,6 +175,7 @@ ClaudeTuneProcessor::~ClaudeTuneProcessor()
     cancelPendingUpdate();
     apvts.removeParameterListener (ParamIDs::root, this);
     apvts.removeParameterListener (ParamIDs::scale, this);
+    apvts.removeParameterListener (ParamIDs::mode, this);
 }
 
 //==============================================================================
@@ -168,7 +192,10 @@ void ClaudeTuneProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     const int channels = juce::jmax (1, getTotalNumOutputChannels());
     engine.prepare (sampleRate, samplesPerBlock, channels);
     engine.setParams (readParams());
-    lastLatency = engine.getLatencySamples();
+    session.prepare (sampleRate, channels, samplesPerBlock);
+
+    desiredLatency.store (getMode() == Mode::Edit ? 0 : engine.getLatencySamples());
+    lastLatency = desiredLatency.load();
     setLatencySamples (lastLatency);
 }
 
@@ -197,39 +224,99 @@ void ClaudeTuneProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 {
     juce::ScopedNoDenormals noDenormals;
 
-    for (const auto meta : midi)
-    {
-        const auto m = meta.getMessage();
-        if (m.isNoteOn())
-            engine.noteOn (m.getNoteNumber());
-        else if (m.isNoteOff())
-            engine.noteOff (m.getNoteNumber());
-        else if (m.isAllNotesOff() || m.isAllSoundOff())
-            engine.allNotesOff();
-    }
-
-    NoteStateArray states;
-    for (size_t i = 0; i < 128; ++i)
-        states[i] = (NoteState) noteStates[i].load (std::memory_order_relaxed);
-    engine.setNoteStates (states);
-    engine.setParams (readParams());
-
-    if (engine.getLatencySamples() != lastLatency)
-    {
-        lastLatency = engine.getLatencySamples();
-        triggerAsyncUpdate(); // tell the host on the message thread
-    }
-
     const int channels = juce::jmin (buffer.getNumChannels(), getTotalNumOutputChannels());
     for (int c = getTotalNumInputChannels(); c < buffer.getNumChannels(); ++c)
         buffer.clear (c, 0, buffer.getNumSamples());
 
-    engine.process (buffer.getArrayOfWritePointers(), channels, buffer.getNumSamples());
+    const bool editMode = getMode() == Mode::Edit;
+
+    if (editMode)
+    {
+        wasEditMode = true;
+        edit::Transport tr;
+        if (auto* hostPlayHead = getPlayHead())
+        {
+            if (auto pos = hostPlayHead->getPosition())
+            {
+                tr.playing = pos->getIsPlaying() || pos->getIsRecording();
+                if (auto samples = pos->getTimeInSamples())
+                {
+                    tr.hasPosition = true;
+                    tr.timeInSamples = *samples;
+                }
+                if (auto bpm = pos->getBpm())
+                    tr.bpm = *bpm;
+                if (auto ppq = pos->getPpqPosition())
+                {
+                    tr.hasPpq = true;
+                    tr.ppqPosition = *ppq;
+                }
+                if (auto sig = pos->getTimeSignature())
+                {
+                    tr.timeSigNumerator = sig->numerator;
+                    tr.timeSigDenominator = sig->denominator;
+                }
+            }
+        }
+        tr.realtime = ! isNonRealtime();
+
+        session.setBypassEdits (raw.editBypass->load() > 0.5f);
+        session.setCaptureLocked (raw.editLock->load() > 0.5f);
+        session.process (buffer.getArrayOfWritePointers(), channels, buffer.getNumSamples(), tr);
+
+        engine.allNotesOff();
+        auto& t = engine.telemetry;
+        t.inputPeak.store (std::max (t.inputPeak.load(), buffer.getMagnitude (0, buffer.getNumSamples())));
+    }
+    else
+    {
+        if (wasEditMode)
+        {
+            engine.reset(); // don't play stale audio from before the mode switch
+            wasEditMode = false;
+        }
+
+        for (const auto meta : midi)
+        {
+            const auto m = meta.getMessage();
+            if (m.isNoteOn())
+                engine.noteOn (m.getNoteNumber());
+            else if (m.isNoteOff())
+                engine.noteOff (m.getNoteNumber());
+            else if (m.isAllNotesOff() || m.isAllSoundOff())
+                engine.allNotesOff();
+        }
+
+        NoteStateArray states;
+        for (size_t i = 0; i < 128; ++i)
+            states[i] = (NoteState) noteStates[i].load (std::memory_order_relaxed);
+        engine.setNoteStates (states);
+        engine.setParams (readParams());
+        engine.process (buffer.getArrayOfWritePointers(), channels, buffer.getNumSamples());
+    }
+
+    const int wanted = editMode ? 0 : engine.getLatencySamples();
+    if (wanted != lastLatency)
+    {
+        lastLatency = wanted;
+        desiredLatency.store (wanted);
+        triggerAsyncUpdate(); // tell the host on the message thread
+    }
 }
 
 void ClaudeTuneProcessor::handleAsyncUpdate()
 {
-    setLatencySamples (engine.telemetry.latency.load());
+    setLatencySamples (desiredLatency.load());
+}
+
+void ClaudeTuneProcessor::setMode (Mode m)
+{
+    if (auto* p = apvts.getParameter (ParamIDs::mode))
+    {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (m == Mode::Edit ? 1.0f : 0.0f);
+        p->endChangeGesture();
+    }
 }
 
 //==============================================================================
@@ -270,13 +357,58 @@ void ClaudeTuneProcessor::rebuildScale()
 
 void ClaudeTuneProcessor::resetScale() { rebuildScale(); }
 
-void ClaudeTuneProcessor::parameterChanged (const juce::String&, float)
+void ClaudeTuneProcessor::parameterChanged (const juce::String& id, float)
 {
+    if (id == ParamIDs::mode)
+        return; // read directly by the audio thread
     rebuildScale();
 }
 
+std::array<bool, 128> ClaudeTuneProcessor::getAllowedNotes() const
+{
+    std::array<bool, 128> allowed {};
+    for (size_t n = 0; n < 128; ++n)
+    {
+        const auto s = (NoteState) noteStates[n].load();
+        allowed[n] = s == NoteState::Legal || s == NoteState::Bypass;
+    }
+    return allowed;
+}
+
+float ClaudeTuneProcessor::getReferenceOffset() const
+{
+    return 12.0f * std::log2 (raw.refHz->load() / 440.0f);
+}
+
+bool ClaudeTuneProcessor::usesFlats() const
+{
+    return apvts.getRawParameterValue (ParamIDs::useFlats)->load() > 0.5f;
+}
+
+void ClaudeTuneProcessor::correctAllNotes (const std::vector<uint32_t>& onlyThese)
+{
+    const auto allowed = getAllowedNotes();
+    const float refOffset = getReferenceOffset();
+    const float center = apvts.getRawParameterValue (ParamIDs::editCenter)->load() / 100.0f;
+    const float variation = apvts.getRawParameterValue (ParamIDs::editVariation)->load() / 100.0f;
+    session.edit ([&] (edit::EditDocument& d) {
+        d.correctAll (allowed, center, variation, refOffset, onlyThese.empty() ? nullptr : &onlyThese);
+    });
+}
+
+juce::String ClaudeTuneProcessor::describeScale() const
+{
+    const int root = (int) apvts.getRawParameterValue (ParamIDs::root)->load();
+    const int scale = (int) apvts.getRawParameterValue (ParamIDs::scale)->load();
+    const bool flats = apvts.getRawParameterValue (ParamIDs::useFlats)->load() > 0.5f;
+    juce::String s = juce::String (noteName (root, flats)) + " " + kScales[juce::jlimit (0, kNumScales - 1, scale)].name;
+    if (scaleModified.load())
+        s << " (edited)";
+    return s;
+}
+
 //==============================================================================
-void ClaudeTuneProcessor::getStateInformation (juce::MemoryBlock& destData)
+juce::ValueTree ClaudeTuneProcessor::buildParameterState()
 {
     auto state = apvts.copyState();
     juce::String grid;
@@ -284,18 +416,11 @@ void ClaudeTuneProcessor::getStateInformation (juce::MemoryBlock& destData)
         grid << juce::String ((int) noteStates[i].load());
     state.setProperty ("noteGrid", grid, nullptr);
     state.setProperty ("scaleModified", scaleModified.load(), nullptr);
-
-    if (auto xml = state.createXml())
-        copyXmlToBinary (*xml, destData);
+    return state;
 }
 
-void ClaudeTuneProcessor::setStateInformation (const void* data, int sizeInBytes)
+void ClaudeTuneProcessor::restoreParameterState (const juce::ValueTree& state)
 {
-    auto xml = getXmlFromBinary (data, sizeInBytes);
-    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
-        return;
-
-    auto state = juce::ValueTree::fromXml (*xml);
     apvts.replaceState (state); // may rebuild the scale via the listener...
 
     // ...so restore the custom note grid afterwards
@@ -311,6 +436,89 @@ void ClaudeTuneProcessor::setStateInformation (const void* data, int sizeInBytes
         scaleModified = (bool) state.getProperty ("scaleModified", false);
         ++noteStateVersion;
     }
+}
+
+void ClaudeTuneProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    destData.reset();
+    juce::MemoryOutputStream out (destData, false);
+    out.write (kStateMagic, 4);
+
+    const auto xml = buildParameterState().createXml();
+    const auto xmlText = xml != nullptr ? xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader()) : juce::String();
+    out.writeInt ((int) xmlText.getNumBytesAsUTF8());
+    out.write (xmlText.toRawUTF8(), xmlText.getNumBytesAsUTF8());
+
+    // the captured vocal: compressed audio is cached until the capture changes
+    juce::MemoryBlock sessionData;
+    const uint64_t rev = session.audioRevision();
+    if (rev != 0)
+    {
+        if (rev != cachedAudioRevision || cachedAudioBlob.isEmpty())
+        {
+            const auto state = session.exportState();
+            if (! state.isEmpty())
+            {
+                cachedAudioBlob = SessionCodec::encodeAudio (state);
+                cachedAudioRevision = state.audioRevision;
+            }
+            else
+            {
+                cachedAudioBlob.reset();
+                cachedAudioRevision = 0;
+            }
+        }
+        if (! cachedAudioBlob.isEmpty())
+        {
+            sessionData = cachedAudioBlob;
+            const auto edits = SessionCodec::encodeEdits (session.exportEdits());
+            sessionData.append (edits.getData(), edits.getSize());
+        }
+    }
+    out.writeInt64 ((juce::int64) sessionData.getSize());
+    if (sessionData.getSize() > 0)
+        out.write (sessionData.getData(), sessionData.getSize());
+    out.flush();
+}
+
+void ClaudeTuneProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    if (data == nullptr || sizeInBytes < 4)
+        return;
+
+    if (std::memcmp (data, kStateMagic, 4) != 0)
+    {
+        // ClaudeTune 1.0 project: parameters only
+        auto xml = getXmlFromBinary (data, sizeInBytes);
+        if (xml != nullptr && xml->hasTagName (apvts.state.getType()))
+            restoreParameterState (juce::ValueTree::fromXml (*xml));
+        session.importState ({});
+        return;
+    }
+
+    juce::MemoryInputStream in (data, (size_t) sizeInBytes, false);
+    in.skipNextBytes (4);
+    const int xmlBytes = in.readInt();
+    if (xmlBytes < 0 || in.getNumBytesRemaining() < xmlBytes)
+        return;
+    juce::MemoryBlock xmlData;
+    in.readIntoMemoryBlock (xmlData, xmlBytes);
+    if (auto xml = juce::parseXML (xmlData.toString()))
+        if (xml->hasTagName (apvts.state.getType()))
+            restoreParameterState (juce::ValueTree::fromXml (*xml));
+
+    const auto sessionBytes = in.readInt64();
+    edit::SessionState state;
+    if (sessionBytes > 0 && in.getNumBytesRemaining() >= sessionBytes)
+    {
+        juce::MemoryBlock blob;
+        in.readIntoMemoryBlock (blob, (ssize_t) sessionBytes);
+        if (! SessionCodec::decode (blob.getData(), blob.getSize(), state))
+            state = {};
+    }
+    cachedAudioBlob.reset();
+    cachedAudioRevision = 0;
+    session.importState (std::move (state));
 }
 
 //==============================================================================

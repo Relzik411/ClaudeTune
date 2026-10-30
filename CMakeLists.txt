@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ClaudeTune VERSION 1.0.0 LANGUAGES C CXX)
+project(ClaudeTune VERSION 1.9.0 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(APPLE)
@@ -50,7 +50,7 @@ juce_add_plugin(ClaudeTune
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     VST3_CATEGORIES Fx Pitch Shift
     AU_MAIN_TYPE kAudioUnitType_MusicEffect
     COPY_PLUGIN_AFTER_BUILD ${CLAUDETUNE_COPY_AFTER_BUILD})
@@ -58,7 +58,14 @@ juce_add_plugin(ClaudeTune
 target_sources(ClaudeTune PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/Engine/TuneEngine.cpp)
+    Source/UI/NoteEditor.cpp
+    Source/Engine/TuneEngine.cpp
+    Source/Edit/PitchAnalysis.cpp
+    Source/Edit/NoteSegmenter.cpp
+    Source/Edit/EditModel.cpp
+    Source/Edit/Renderer.cpp
+    Source/Edit/EditSession.cpp
+    Source/SessionCodec.cpp)
 
 target_include_directories(ClaudeTune PRIVATE Source)
 
@@ -84,6 +91,25 @@ option(CLAUDETUNE_BUILD_TESTS "Build the engine test program" ON)
 if(CLAUDETUNE_BUILD_TESTS)
     add_executable(ClaudeTuneEngineTests Tests/EngineTests.cpp Source/Engine/TuneEngine.cpp)
     target_include_directories(ClaudeTuneEngineTests PRIVATE Source)
+
+    add_executable(ClaudeTuneEditTests
+        Tests/EditTests.cpp
+        Source/Edit/PitchAnalysis.cpp
+        Source/Edit/NoteSegmenter.cpp
+        Source/Edit/EditModel.cpp
+        Source/Edit/Renderer.cpp)
+    target_include_directories(ClaudeTuneEditTests PRIVATE Source Tests)
+
+    add_executable(ClaudeTuneSessionTests
+        Tests/SessionTests.cpp
+        Source/Edit/PitchAnalysis.cpp
+        Source/Edit/NoteSegmenter.cpp
+        Source/Edit/EditModel.cpp
+        Source/Edit/Renderer.cpp
+        Source/Edit/EditSession.cpp)
+    target_include_directories(ClaudeTuneSessionTests PRIVATE Source Tests)
+    find_package(Threads REQUIRED)
+    target_link_libraries(ClaudeTuneSessionTests PRIVATE Threads::Threads)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -96,12 +122,59 @@ if(CLAUDETUNE_BUILD_SNAPSHOT)
         Tools/UISnapshot.cpp
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
-        Source/Engine/TuneEngine.cpp)
-    target_include_directories(ClaudeTuneSnapshot PRIVATE Source)
+        Source/UI/NoteEditor.cpp
+        Source/Engine/TuneEngine.cpp
+        Source/Edit/PitchAnalysis.cpp
+        Source/Edit/NoteSegmenter.cpp
+        Source/Edit/EditModel.cpp
+        Source/Edit/Renderer.cpp
+        Source/Edit/EditSession.cpp
+        Source/SessionCodec.cpp)
+    target_include_directories(ClaudeTuneSnapshot PRIVATE Source Tests)
     target_compile_definitions(ClaudeTuneSnapshot PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
         JucePlugin_Name="ClaudeTune" JucePlugin_IsSynth=0)
     target_link_libraries(ClaudeTuneSnapshot PRIVATE
+        juce::juce_audio_utils juce::juce_recommended_config_flags)
+
+    juce_add_console_app(ClaudeTunePluginTest PRODUCT_NAME "ClaudeTunePluginTest")
+    target_sources(ClaudeTunePluginTest PRIVATE
+        Tools/PluginTest.cpp
+        Source/PluginProcessor.cpp
+        Source/PluginEditor.cpp
+        Source/UI/NoteEditor.cpp
+        Source/Engine/TuneEngine.cpp
+        Source/Edit/PitchAnalysis.cpp
+        Source/Edit/NoteSegmenter.cpp
+        Source/Edit/EditModel.cpp
+        Source/Edit/Renderer.cpp
+        Source/Edit/EditSession.cpp
+        Source/SessionCodec.cpp)
+    target_include_directories(ClaudeTunePluginTest PRIVATE Source Tests)
+    target_compile_definitions(ClaudeTunePluginTest PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
+        JucePlugin_Name="ClaudeTune" JucePlugin_IsSynth=0)
+    target_link_libraries(ClaudeTunePluginTest PRIVATE
+        juce::juce_audio_utils juce::juce_recommended_config_flags)
+
+    juce_add_console_app(ClaudeTuneEditorTest PRODUCT_NAME "ClaudeTuneEditorTest")
+    target_sources(ClaudeTuneEditorTest PRIVATE
+        Tools/EditorTest.cpp
+        Source/PluginProcessor.cpp
+        Source/PluginEditor.cpp
+        Source/UI/NoteEditor.cpp
+        Source/Engine/TuneEngine.cpp
+        Source/Edit/PitchAnalysis.cpp
+        Source/Edit/NoteSegmenter.cpp
+        Source/Edit/EditModel.cpp
+        Source/Edit/Renderer.cpp
+        Source/Edit/EditSession.cpp
+        Source/SessionCodec.cpp)
+    target_include_directories(ClaudeTuneEditorTest PRIVATE Source Tests)
+    target_compile_definitions(ClaudeTuneEditorTest PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
+        JucePlugin_Name="ClaudeTune" JucePlugin_IsSynth=0)
+    target_link_libraries(ClaudeTuneEditorTest PRIVATE
         juce::juce_audio_utils juce::juce_recommended_config_flags)
 endif()
 
@@ -113,7 +186,7 @@ if(CLAUDETUNE_BUILD_HOSTTEST)
     juce_add_console_app(ClaudeTuneHostTest PRODUCT_NAME "ClaudeTuneHostTest")
     target_sources(ClaudeTuneHostTest PRIVATE Tools/HostTest.cpp)
     target_compile_definitions(ClaudeTuneHostTest PRIVATE
-        JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+        JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(ClaudeTuneHostTest PRIVATE
         juce::juce_audio_processors juce::juce_gui_basics juce::juce_recommended_config_flags)
 endif()

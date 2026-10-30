@@ -1,9 +1,13 @@
 # ClaudeTune
 
-Real-time vocal pitch correction plug-in (VST3 / Audio Unit / standalone app) for macOS, built with JUCE.
-It mirrors the control set of a classic real-time vocal tuner, with its own engine and its own interface.
+Vocal pitch correction plug-in (VST3 / Audio Unit / standalone app) for macOS, built with JUCE.
 
-![ClaudeTune](docs/screenshot.png)
+* **Live tab** – real-time correction with the control set of a classic real-time vocal tuner.
+* **Edit tab** *(2 preview)* – ClaudeTune captures the vocal as your DAW plays it, finds the notes,
+  and plays your edits back in place, with zero latency.
+
+![ClaudeTune Live tab](docs/screenshot.png)
+![ClaudeTune Edit tab](docs/screenshot-edit.png)
 
 ---
 
@@ -19,7 +23,7 @@ You have two options. Both produce the same plug-in.
 3. Open the repository's **Actions** tab. The "Build ClaudeTune for macOS" workflow starts on its own
    (or press **Run workflow**). It takes about 10 minutes.
 4. When it shows a green check, open the run and download **ClaudeTune-macOS** at the bottom of the page.
-5. Unzip it and double-click `ClaudeTune-1.0.0-macOS.pkg`.
+5. Unzip it and double-click `ClaudeTune-1.9.0-macOS.pkg`.
    - Because the installer isn't signed with a paid Apple Developer ID, macOS will say it can't verify it.
      **Right-click the .pkg → Open → Open**, or go to *System Settings → Privacy & Security* and click **Open Anyway**.
 6. Restart your DAW (Logic: it rescans Audio Units on launch).
@@ -33,7 +37,7 @@ cd ClaudeTune
 ./scripts/build_mac.sh
 ```
 
-This builds a native binary, runs the engine tests, and installs the VST3 + AU into
+This builds a native binary, runs all the tests, and installs the VST3 + AU into
 `~/Library/Audio/Plug-Ins`. The standalone app ends up in `build/ClaudeTune_artefacts/Release/Standalone/`.
 
 ### Where to find it
@@ -49,7 +53,100 @@ to route a MIDI track into ClaudeTune. In Ableton, set a MIDI track's output to 
 
 ---
 
-## Controls
+## Edit tab (preview)
+
+1. Put ClaudeTune **first** on the vocal track (before EQ, compression or effects) and click **EDIT**.
+2. **Press play.** ClaudeTune records the vocal as Logic plays it — the status line shows *Capturing*.
+   Notes appear in the overview a moment later. Play the whole vocal once, or just the part you want to edit;
+   you can capture more later and the pieces join up.
+3. Click **Correct** to snap every note to the key and scale set on the **Live** tab
+   (or select some notes first to correct just those). **Center** pulls each note's drift to its centre,
+   **Variation** keeps that much of the wobble and vibrato.
+4. Fine-tune individual notes in the editor (below), then **press play** to hear the result.
+   **Compare original** A/Bs your edits.
+
+### The note editor
+
+Notes are drawn where they will play, with the corrected pitch curve inside. When a note has been
+moved, a faint outline shows where it was sung. The label above each note shows its pitch and how far
+the singer was from it.
+
+| To… | Do this |
+|---|---|
+| select a note | click it (shift- or cmd-click to add more) |
+| select several | drag a rectangle across empty space; cmd+A selects all |
+| retune | drag the note up or down (it snaps; hold **Option** to move freely) |
+| snap a note onto pitch | double-click it |
+| nudge pitch | ↑ / ↓ one semitone · shift+↑/↓ an octave · option+↑/↓ 10 cents |
+| step through notes | ← / → |
+| reset notes (pitch, shaping and timing) | Delete |
+| zoom time / pitch | cmd+scroll or pinch / option+scroll · `+` `−` keys · **Fit** (F) |
+| scroll | scroll wheel or trackpad; drag in the overview strip at the bottom |
+| undo / redo | cmd+Z / shift+cmd+Z, or the toolbar buttons |
+| switch tools | **1** Select · **2** Split · **3** Draw (or the toolbar) |
+| cut a note in two | Split tool, click where to cut (a dashed line previews it) |
+| join notes | select neighbours, press **M** (or **Merge**) |
+| draw pitch by hand | Draw tool, drag across a note; hold **Option** to erase the drawing |
+| move a note in time | drag it sideways (the drag locks to time or pitch after a few pixels); selected notes move together |
+| snap timing to the grid | hold **Shift** while dragging (1/16 notes at the project tempo) |
+| stretch or shorten a note | drag its left or right edge (the cursor changes); Shift snaps the edge |
+| nudge timing | option+← / → 10 ms · shift+option+← / → 50 ms |
+
+### Shaping notes
+
+Select one or more notes and use the **Note** panel. Each knob drag is one undo step; double-click
+a knob to reset it.
+
+Timing edits time-stretch the audio rather than cutting it. Notes sung legato keep their shared
+edge together when one of them moves. A note can't be pushed past its
+neighbour.
+
+| Knob | What it does |
+|---|---|
+| **Center** | pulls the note's slow drift onto its centre (0% = untouched) |
+| **Variation** | keeps this much of the fast wobble and vibrato (0% flat, 100% natural, 200% exaggerated) |
+| **Glide in / out** | how long the pitch takes to slide into and out of the note |
+| **Gain** | makes the note louder or quieter (−24 to +12 dB) |
+
+Hand-drawn pitch replaces everything else on the frames you draw over and blends into the
+surrounding pitch over ~40 ms at each end, so strokes don't jump.
+
+**Snap** in the toolbar chooses what a dragged note lands on: semitones, notes of the scale, or nothing.
+The ruler shows bars and beats from Logic's tempo once you've pressed play.
+
+**Hearing edits while Logic is stopped:** with **Audition** on, clicking a note loops it while the mouse
+is held, so you hear pitch changes as you drag. Click the ruler (or empty space) to place the cursor and
+press **Preview** (or Return) to play the edited vocal from there. A plug-in can't move Logic's playhead,
+so this plays inside ClaudeTune; pressing play in Logic always takes over. Logic only runs plug-ins on the
+**selected** track while stopped, so select the vocal track if the preview doesn't start (the status line
+tells you).
+
+What ClaudeTune does on later passes:
+
+| You… | ClaudeTune… |
+|---|---|
+| play the same audio again | applies your edits (the region gain/fader before it can change freely) |
+| replace or re-record part of the vocal | plays the new audio untouched, captures it, keeps edits everywhere else. **Restore previous take** brings the old audio and edits back |
+| mute or delete part of the region | plays the silence and keeps the old capture and edits |
+| click **Lock capture** | stops capturing: changed audio plays untouched and is never recorded |
+| bounce / export | renders the edits (offline bounces wait for capture to keep up) |
+
+The capture is saved **inside the Logic project** (lossless 24-bit FLAC plus the analysis), so edits come back
+when you reopen it. A 3-minute mono vocal adds around 10–15 MB to the project.
+
+**Good to know**
+
+* Edit mode reports 0 ms latency. Switching tabs changes the latency Logic compensates for, so stop playback first.
+* The project's sample rate must stay the one the vocal was captured at; ClaudeTune passes audio through
+  untouched (and says so) if it changes.
+* Logic only sends audio while playing. Regions you never play are never captured.
+* Dragging notes in time (moving and stretching) comes next; the engine for it is already in and tested.
+* Keyboard shortcuts need the ClaudeTune window to have focus (click in the editor first). Space always
+  goes to Logic.
+
+---
+
+## Live tab controls
 
 | Control | What it does | Range (default) |
 |---|---|---|
@@ -97,6 +194,8 @@ For live monitoring while tracking, pick the narrowest range that covers the sin
 
 ## How it works
 
+### Live tab
+
 1. **Pitch detection** — YIN with an FFT-computed autocorrelation, every ~2.7 ms, on the newest audio. It looks an
    octave below the range so low notes aren't mistaken for harmonics; a 3-point median removes octave glitches.
 2. **Target logic** — note grid → legal target (with tolerance), or the held MIDI note in Target Pitch mode.
@@ -109,21 +208,45 @@ For live monitoring while tracking, pick the narrowest range that covers the sin
 The engine (`Source/Engine`) has no JUCE dependency. `Tests/EngineTests.cpp` checks correction accuracy,
 scales, note states, tolerance, vibrato, bypass, MIDI target, formant mode, stereo and CPU at 44.1/48/96 kHz.
 
+### Edit tab
+
+1. **Capture** — on the audio thread, every block is compared with what was captured at that timeline
+   position, in ~1.3 ms windows. New audio goes to a lock-free FIFO; a background worker adds it to the
+   document. A difference only counts as a re-take after it lasts 20 ms, and a short look-back buffer makes
+   sure the re-take is still captured from its first sample.
+2. **Analysis** — offline YIN with several candidates per frame and a Viterbi path (no octave jumps),
+   then note segmentation at pitch changes and loudness dips. New audio is analysed locally, in about 25 ms
+   per 0.75 s, and edits on notes whose audio didn't change are carried over.
+3. **Rendering** — PSOLA with pitch marks locked to the waveform, timing edits through a time map.
+   Untouched audio is copied bit-for-bit; edited regions are re-rendered incrementally (~5–10 ms per edit).
+4. **Playback** — rendered audio is published as immutable chunks (no locks, no allocation on the audio
+   thread) and applied as a *difference* on top of the live input, so unedited audio stays identical and
+   gain changes before the plug-in carry through.
+
+`Tests/EditTests.cpp` covers analysis, segmentation and every edit type; `Tests/SessionTests.cpp` drives
+the capture system like a DAW (re-takes, mutes, loops, gain changes, save/restore, editing while playing,
+preview playback). `Tools/EditorTest.cpp` drives the note editor with synthetic mouse and keyboard input.
+
 ## Project layout
 
 ```
-Source/Engine/     DSP: FFT, YIN detector, scales, TuneEngine (PSOLA)
-Source/UI/         look-and-feel, tuner, meters, keyboard grid
-Source/Plugin*     JUCE processor (parameters, state, MIDI) and editor
-Tests/             engine tests (also renders demo WAVs: ./ClaudeTuneEngineTests <folder>)
-Tools/             headless UI snapshot tool
+Source/Engine/     Live DSP: FFT, YIN detector, scales, TuneEngine (PSOLA)
+Source/Edit/       Edit DSP: analysis, segmentation, edit model, renderer, capture session
+Source/UI/         look-and-feel, tuner, meters, keyboard grid, Edit page, note editor
+Source/Plugin*     JUCE processor (parameters, state, MIDI, modes) and editor
+Source/SessionCodec*  capture storage in the project (FLAC + analysis)
+Tests/             engine, edit and session tests (no JUCE needed)
+Tools/             UI snapshot, end-to-end plug-in test, VST3 host test, editor interaction test
 scripts/           build_mac.sh
 packaging/mac/     installer definition
 .github/workflows/ macOS build + .pkg installer
 ```
 
-## Next: graphical editor
+## Roadmap
 
-The engine already exposes everything a graphical (offline) editor needs: per-hop detected pitch, target notes
-and a correction curve keyed to input time. A graphical mode would record the detected pitch of a take,
-show it as note blobs, and let you draw the output-pitch curve that the PSOLA stage already follows.
+1. ~~Offline analysis and render engine~~
+2. ~~Capture in the DAW, change detection, project storage~~
+3. ~~Note editor: zoomable piano roll, click/drag notes, playback from the cursor~~
+4. ~~Per-note tools: pitch, Center, Variation, transitions, gain, split/merge, pitch pencil, undo~~
+5. ~~Timing edits in the editor (move/stretch notes)~~
+6. Polish
