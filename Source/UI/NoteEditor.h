@@ -9,7 +9,9 @@
 //  * scroll with the wheel / trackpad, zoom with cmd+wheel (time), option+wheel
 //    (pitch) or pinch; the strip at the bottom shows the whole capture
 //  * with the host stopped, clicking a note loops it so you hear edits as you
-//    make them, and the cursor can play the edited vocal from any point
+//    make them, and the teal play marker plays the edited vocal from any point;
+//    the marker follows Logic's playhead, so ClaudeTune plays from where Logic stopped
+//  * a hint line under the roll says what a click or drag will do right now
 
 #include "Theme.h"
 #include "../PluginProcessor.h"
@@ -38,6 +40,10 @@ public:
     void zoomTime (double factor, float aroundX);
     void zoomPitch (float factor, float aroundY);
     void togglePreviewFromCursor();
+    bool isAuditioningNote() const noexcept { return auditioningNote; }
+
+    // the hint line's current text (what a click or drag would do here)
+    juce::String getHintText() const;
 
     void setTool (Tool t);
     Tool getTool() const noexcept { return tool; }
@@ -54,6 +60,7 @@ public:
     juce::Rectangle<float> getNoteBounds (uint32_t id) const;
     juce::Rectangle<float> getRollArea() const noexcept { return rollArea; }
     juce::Rectangle<float> getRulerArea() const noexcept { return rulerArea; }
+    juce::Rectangle<float> getHintArea() const noexcept { return hintArea; }
     double getCursorSeconds() const noexcept { return cursorSec; }
     double getViewStart() const noexcept { return viewStart; }
     double getSecondsPerPixel() const noexcept { return spp; }
@@ -105,6 +112,8 @@ private:
     void drawRoll (juce::Graphics&);
     void drawNavigator (juce::Graphics&);
     void drawEmpty (juce::Graphics&);
+    void drawHint (juce::Graphics&);
+    void updateHint();
 
     ClaudeTuneProcessor& proc;
     std::shared_ptr<const edit::SessionSnapshot> snap;
@@ -114,7 +123,7 @@ private:
     bool flats = false;
 
     // view
-    juce::Rectangle<float> rulerArea, keysArea, rollArea, navArea;
+    juce::Rectangle<float> rulerArea, keysArea, rollArea, navArea, hintArea;
     double viewStart = 0.0, spp = 0.01; // seconds at the left edge, seconds per pixel
     float topPitch = 76.0f, rowH = 14.0f;
     bool viewInitialised = false;
@@ -123,6 +132,8 @@ private:
     Snap snapMode = Snap::Chromatic;
     Tool tool = Tool::Select;
     juce::Point<float> lastDrawPoint, hoverPos;
+    bool mouseInside = false;
+    juce::String shownHint;
     bool drawErasing = false;
     bool follow = true, auditionOnClick = true;
     std::vector<uint32_t> selection;

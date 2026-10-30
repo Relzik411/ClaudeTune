@@ -58,7 +58,7 @@ jobs:
 
       - name: Build installer (.pkg)
         run: |
-          VERSION=1.9.0
+          VERSION=1.9.1
           chmod +x packaging/mac/scripts/postinstall
           pkgbuild --root stage/vst3 --install-location /Library/Audio/Plug-Ins/VST3 \
                    --identifier com.claudetune.ClaudeTune.vst3 --version $VERSION ClaudeTune-VST3.pkg

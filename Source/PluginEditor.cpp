@@ -26,6 +26,7 @@ ClaudeTuneEditor::ClaudeTuneEditor (ClaudeTuneProcessor& p)
     liveTab.setTooltip ("Live: real-time correction as the vocal plays");
     editTab.setTooltip ("Edit: capture the vocal and edit its notes");
     addChildComponent (editPage);
+    addChildComponent (editPage.getTransport()); // the Edit tab's Play lives in the header
 
     setupKnob (speed, ParamIDs::speed);
     setupKnob (transition, ParamIDs::transition);
@@ -177,6 +178,7 @@ void ClaudeTuneEditor::updateModeVisibility()
     for (auto* comp : liveComponents)
         comp->setVisible (! showingEdit);
     editPage.setVisible (showingEdit);
+    editPage.getTransport().setVisible (showingEdit);
     liveTab.setToggleState (! showingEdit, juce::dontSendNotification);
     editTab.setToggleState (showingEdit, juce::dontSendNotification);
     repaint();
@@ -305,6 +307,7 @@ void ClaudeTuneEditor::resized()
     liveTab.setBounds (196, 11, 74, 28);
     editTab.setBounds (274, 11, 74, 28);
     editPage.setBounds (0, 56, kWidth, kHeight - 56);
+    editPage.getTransport().setBounds (372, 5, 356, 38);
 
     // --- top-left: timing ----------------------------------------------------
     const R timing (16, 56, 330, 296);

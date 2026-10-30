@@ -8,7 +8,7 @@ namespace claudetune::ui
 
 namespace
 {
-    constexpr float kRulerH = 26.0f, kKeysW = 46.0f, kNavH = 30.0f;
+    constexpr float kRulerH = 26.0f, kKeysW = 46.0f, kNavH = 30.0f, kHintH = 22.0f;
     constexpr float kMinRowH = 5.0f, kMaxRowH = 40.0f;
     constexpr double kMinSpp = 1.0 / 4000.0;   // 4000 px per second
     constexpr float kLowestPitch = 24.0f, kHighestPitch = 108.0f;
@@ -52,7 +52,7 @@ void NoteEditor::resized()
 {
     auto r = getLocalBounds().toFloat();
     navArea = r.removeFromBottom (kNavH);
-    r.removeFromBottom (4.0f);
+    hintArea = r.removeFromBottom (kHintH);
     rulerArea = r.removeFromTop (kRulerH).withTrimmedLeft (kKeysW);
     keysArea = r.removeFromLeft (kKeysW);
     rollArea = r;
@@ -99,6 +99,9 @@ void NoteEditor::refresh()
     const auto pv = session.previewPosition();
     if (ph != lastPlayhead || playing != lastPlaying || previewing != lastPreviewing || (previewing && pv != lastPreviewPos))
     {
+        // the play marker follows Logic: wherever Logic plays or parks, ClaudeTune plays from there next
+        if (ph != lastPlayhead && ! previewing && drag != Drag::Ruler && snap && snap->sampleRate > 0.0)
+            cursorSec = std::max (0.0, (double) ph / snap->sampleRate);
         lastPlayhead = ph;
         lastPlaying = playing;
         lastPreviewing = previewing;
@@ -123,6 +126,7 @@ void NoteEditor::refresh()
 
     if (needsRepaint)
         repaint();
+    updateHint();
 }
 
 //==============================================================================
@@ -524,6 +528,8 @@ void NoteEditor::nudgeSelection (double seconds)
 void NoteEditor::mouseMove (const juce::MouseEvent& e)
 {
     hoverPos = e.position;
+    mouseInside = true;
+    updateHint();
     if (tool == Tool::Split) repaint();
     const auto* n = noteAt (e.position);
     const uint32_t id = n ? n->id : 0;
@@ -546,7 +552,9 @@ void NoteEditor::mouseMove (const juce::MouseEvent& e)
 
 void NoteEditor::mouseExit (const juce::MouseEvent&)
 {
+    mouseInside = false;
     if (hoverId != 0) { hoverId = 0; repaint(); }
+    updateHint();
 }
 
 void NoteEditor::mouseDown (const juce::MouseEvent& e)
@@ -567,7 +575,14 @@ void NoteEditor::mouseDown (const juce::MouseEvent& e)
     {
         drag = Drag::Ruler;
         cursorSec = std::max (0.0, secondsForX (e.position.x));
+        // already playing in ClaudeTune: jump there, like clicking Logic's ruler
+        if (proc.getSession().isPreviewing() && ! auditioningNote)
+        {
+            proc.getSession().stopPreview();
+            togglePreviewFromCursor();
+        }
         repaint();
+        updateHint();
         return;
     }
     if (! rollArea.contains (e.position))
@@ -673,6 +688,7 @@ void NoteEditor::mouseDrag (const juce::MouseEvent& e)
             if (std::max (dx, dy) < 4.0f)
                 break;
             drag = dx > dy * 1.2f ? Drag::Time : Drag::Pitch;
+            updateHint();
             mouseDrag (e);
             break;
         }
@@ -743,6 +759,7 @@ void NoteEditor::mouseUp (const juce::MouseEvent&)
     drag = Drag::None;
     marquee = {};
     repaint();
+    updateHint();
 }
 
 void NoteEditor::mouseDoubleClick (const juce::MouseEvent& e)
@@ -818,7 +835,7 @@ bool NoteEditor::keyPressed (const juce::KeyPress& key)
         setSelection ({});
         return true;
     }
-    if (code == juce::KeyPress::returnKey)
+    if (code == juce::KeyPress::returnKey || (code == juce::KeyPress::spaceKey && ! mods.isAnyModifierKeyDown()))
     {
         togglePreviewFromCursor();
         return true;
@@ -871,7 +888,7 @@ void NoteEditor::paint (juce::Graphics& g)
 {
     using namespace juce;
     g.setColour (Colours::background);
-    g.fillRoundedRectangle (getLocalBounds().toFloat().withTrimmedBottom (kNavH + 4.0f), 8.0f);
+    g.fillRoundedRectangle (getLocalBounds().toFloat().withTrimmedBottom (kNavH + kHintH), 8.0f);
 
     if (! snap || snap->coverage.empty() || snap->sampleRate <= 0.0)
     {
@@ -882,13 +899,14 @@ void NoteEditor::paint (juce::Graphics& g)
     drawRoll (g);
     drawKeys (g);
     drawRuler (g);
+    drawHint (g);
     drawNavigator (g);
 }
 
 void NoteEditor::drawEmpty (juce::Graphics& g)
 {
     using namespace juce;
-    auto bounds = getLocalBounds().toFloat().withTrimmedBottom (kNavH + 4.0f);
+    auto bounds = getLocalBounds().toFloat().withTrimmedBottom (kNavH + kHintH);
     const auto c = bounds.getCentre().translated (0.0f, -26.0f);
     Path wave;
     wave.startNewSubPath (c.x - 120.0f, c.y);
@@ -1092,19 +1110,31 @@ void NoteEditor::drawRoll (juce::Graphics& g)
         g.drawRect (marquee, 1.0f);
     }
 
-    g.setColour (Colours::teal.withAlpha (0.8f));
-    g.drawVerticalLine ((int) xForSeconds (cursorSec), rollArea.getY(), rollArea.getBottom());
-
+    // ClaudeTune's play marker (teal) and Logic's playhead (white while Logic plays,
+    // a faint dashed line while it's parked somewhere else)
     auto& session = proc.getSession();
-    if (session.isPreviewing())
+    const float cx = xForSeconds (cursorSec);
+    const float lx = xForSeconds ((double) session.playheadSamples() / sr);
+    if (session.isPlaying())
     {
-        g.setColour (Colours::teal);
-        g.fillRect (xForSeconds ((double) session.previewPosition() / sr) - 0.75f, rollArea.getY(), 1.5f, rollArea.getHeight());
+        g.setColour (Colours::text);
+        g.fillRect (lx - 0.75f, rollArea.getY(), 1.5f, rollArea.getHeight());
     }
     else
     {
-        g.setColour (session.isPlaying() ? Colours::text : Colours::textDim.withAlpha (0.6f));
-        g.fillRect (xForSeconds ((double) session.playheadSamples() / sr) - 0.6f, rollArea.getY(), 1.2f, rollArea.getHeight());
+        if (std::abs (lx - cx) >= 2.0f)
+        {
+            g.setColour (Colours::textDim.withAlpha (0.55f));
+            const float dash[] = { 4.0f, 4.0f };
+            g.drawDashedLine (Line<float> (lx, rollArea.getY(), lx, rollArea.getBottom()), dash, 2, 1.0f);
+        }
+        g.setColour (Colours::teal.withAlpha (session.isPreviewing() ? 0.35f : 0.85f));
+        g.fillRect (cx - 0.6f, rollArea.getY(), 1.2f, rollArea.getHeight());
+    }
+    if (session.isPreviewing())
+    {
+        g.setColour (Colours::teal);
+        g.fillRect (xForSeconds ((double) session.previewPosition() / sr) - 1.0f, rollArea.getY(), 2.0f, rollArea.getHeight());
     }
 }
 
@@ -1205,12 +1235,121 @@ void NoteEditor::drawRuler (juce::Graphics& g)
         }
     }
 
-    // cursor marker
+    // markers: Logic's playhead (when it's somewhere else) and ClaudeTune's play marker
+    auto& session = proc.getSession();
     const float cx = xForSeconds (cursorSec);
-    Path tri;
-    tri.addTriangle (cx - 6.0f, rulerArea.getBottom() - 9.0f, cx + 6.0f, rulerArea.getBottom() - 9.0f, cx, rulerArea.getBottom());
-    g.setColour (Colours::teal);
-    g.fillPath (tri);
+    const float lx = xForSeconds ((double) session.playheadSamples() / sr);
+    if (session.isPlaying() || std::abs (lx - cx) >= 2.0f)
+    {
+        Path tri;
+        tri.addTriangle (lx - 5.0f, rulerArea.getBottom() - 8.0f, lx + 5.0f, rulerArea.getBottom() - 8.0f, lx, rulerArea.getBottom());
+        g.setColour (session.isPlaying() ? Colours::text : Colours::textDim);
+        g.fillPath (tri);
+        if (! session.isPlaying())
+        {
+            g.setFont (font (9.5f, true));
+            g.drawText ("Logic", Rectangle<float> (lx + 4.0f, rulerArea.getBottom() - 12.0f, 32.0f, 11.0f), Justification::centredLeft, false);
+        }
+    }
+    if (! session.isPlaying())
+    {
+        // a teal flag with a play symbol: "ClaudeTune plays from here"
+        const auto flag = Rectangle<float> (cx - 0.6f, rulerArea.getBottom() - 15.0f, 15.0f, 15.0f);
+        Path p;
+        p.addRoundedRectangle (flag.getX(), flag.getY(), flag.getWidth(), flag.getHeight(), 3.0f, 3.0f, false, true, false, true);
+        g.setColour (Colours::teal);
+        g.fillPath (p);
+        Path play;
+        play.addTriangle (flag.getX() + 5.0f, flag.getY() + 3.5f, flag.getX() + 11.5f, flag.getCentreY(), flag.getX() + 5.0f, flag.getBottom() - 3.5f);
+        g.setColour (Colours::background);
+        g.fillPath (play);
+    }
+    if (session.isPreviewing())
+    {
+        const float px = xForSeconds ((double) session.previewPosition() / sr);
+        Path tri;
+        tri.addTriangle (px - 6.0f, rulerArea.getBottom() - 9.0f, px + 6.0f, rulerArea.getBottom() - 9.0f, px, rulerArea.getBottom());
+        g.setColour (Colours::teal);
+        g.fillPath (tri);
+    }
+}
+
+//==============================================================================
+// Hint line
+
+juce::String NoteEditor::getHintText() const
+{
+    auto& session = proc.getSession();
+    if (! snap || snap->coverage.empty())
+        return {};
+
+    switch (drag)
+    {
+        case Drag::Pitch:        return juce::String::fromUTF8 ("Retuning  \xc2\xb7  hold Option to move freely, off the snap");
+        case Drag::Time:         return juce::String::fromUTF8 ("Moving in time  \xc2\xb7  hold Shift to snap the start to the 1/16 grid");
+        case Drag::StretchStart:
+        case Drag::StretchEnd:   return juce::String::fromUTF8 ("Stretching the note  \xc2\xb7  hold Shift to snap the edge to the grid");
+        case Drag::Marquee:      return juce::String::fromUTF8 ("Selecting  \xc2\xb7  hold Shift to add to the selection");
+        case Drag::Draw:         return drawErasing ? juce::String::fromUTF8 ("Erasing drawn pitch") : juce::String::fromUTF8 ("Drawing pitch  \xc2\xb7  hold Option to erase instead");
+        case Drag::Ruler:        return juce::String::fromUTF8 ("Setting where ClaudeTune plays from");
+        case Drag::Navigator:    return juce::String::fromUTF8 ("Scrolling");
+        case Drag::PitchPending:
+        case Drag::None:         break;
+    }
+
+    if (session.isPreviewing() && ! auditioningNote)
+        return juce::String::fromUTF8 ("Playing in ClaudeTune  \xc2\xb7  Return or Esc stops  \xc2\xb7  click the ruler to jump");
+    if (session.isPlaying())
+        return juce::String::fromUTF8 ("Logic is playing: you hear your edits in place");
+
+    if (mouseInside)
+    {
+        if (rulerArea.contains (hoverPos))
+            return juce::String::fromUTF8 ("Click to set where ClaudeTune plays from  \xc2\xb7  double-click to play from there");
+        if (navArea.contains (hoverPos))
+            return juce::String::fromUTF8 ("Overview: click or drag to scroll");
+        if (rollArea.contains (hoverPos))
+        {
+            const auto* n = noteAt (hoverPos);
+            if (tool == Tool::Split)
+                return n ? juce::String::fromUTF8 ("Click to cut this note in two here") : juce::String::fromUTF8 ("Split tool: click a note where you want to cut it  \xc2\xb7  press 1 for Select");
+            if (tool == Tool::Draw)
+                return juce::String::fromUTF8 ("Draw tool: drag across a note to draw its pitch  \xc2\xb7  Option-drag erases  \xc2\xb7  press 1 for Select");
+            if (n != nullptr)
+            {
+                if (edgeAt (*n, hoverPos) != 0)
+                    return juce::String::fromUTF8 ("Drag the edge to stretch or shorten the note  \xc2\xb7  Shift snaps to the grid");
+                juce::String h = juce::String::fromUTF8 ("Drag up/down to retune  \xc2\xb7  sideways to move in time  \xc2\xb7  double-click snaps to pitch");
+                if (auditionOnClick) h << juce::String::fromUTF8 ("  \xc2\xb7  hold to hear it");
+                return h;
+            }
+            return juce::String::fromUTF8 ("Click to set the play marker  \xc2\xb7  drag to select notes  \xc2\xb7  Return plays from the marker");
+        }
+    }
+
+    if (! selection.empty())
+        return juce::String::fromUTF8 ("\xe2\x86\x91\xe2\x86\x93 retune  \xc2\xb7  Option+\xe2\x86\x90\xe2\x86\x92 nudge in time  \xc2\xb7  Delete resets  \xc2\xb7  M merges  \xc2\xb7  Return plays");
+    return juce::String::fromUTF8 ("Return plays from the teal marker  \xc2\xb7  1 Select  \xc2\xb7  2 Split  \xc2\xb7  3 Draw  \xc2\xb7  F fits all notes");
+}
+
+void NoteEditor::updateHint()
+{
+    const auto h = getHintText();
+    if (h != shownHint)
+    {
+        shownHint = h;
+        repaint (hintArea.getSmallestIntegerContainer());
+    }
+}
+
+void NoteEditor::drawHint (juce::Graphics& g)
+{
+    using namespace juce;
+    if (shownHint.isEmpty()) return;
+    auto r = hintArea.withTrimmedLeft (kKeysW).reduced (2.0f, 3.0f);
+    g.setColour (Colours::textDim);
+    g.setFont (font (11.5f));
+    g.drawFittedText (shownHint, r.toNearestInt(), Justification::centredLeft, 1, 0.85f);
 }
 
 void NoteEditor::drawNavigator (juce::Graphics& g)
@@ -1252,9 +1391,10 @@ void NoteEditor::drawNavigator (juce::Graphics& g)
     g.setColour (Colours::text.withAlpha (0.45f));
     g.drawRoundedRectangle (view, 4.0f, 1.0f);
 
-    const double ph = (double) (proc.getSession().isPreviewing() ? proc.getSession().previewPosition()
-                                                                  : proc.getSession().playheadSamples()) / snap->sampleRate;
-    g.setColour (Colours::text.withAlpha (0.7f));
+    const bool previewing = proc.getSession().isPreviewing();
+    const double ph = (double) (previewing ? proc.getSession().previewPosition()
+                                           : proc.getSession().playheadSamples()) / snap->sampleRate;
+    g.setColour (previewing ? Colours::teal : Colours::text.withAlpha (0.7f));
     g.drawVerticalLine ((int) xOf (ph), navArea.getY() + 2.0f, navArea.getBottom() - 2.0f);
 }
 

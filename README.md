@@ -23,7 +23,7 @@ You have two options. Both produce the same plug-in.
 3. Open the repository's **Actions** tab. The "Build ClaudeTune for macOS" workflow starts on its own
    (or press **Run workflow**). It takes about 10 minutes.
 4. When it shows a green check, open the run and download **ClaudeTune-macOS** at the bottom of the page.
-5. Unzip it and double-click `ClaudeTune-1.9.0-macOS.pkg`.
+5. Unzip it and double-click `ClaudeTune-1.9.1-macOS.pkg`.
    - Because the installer isn't signed with a paid Apple Developer ID, macOS will say it can't verify it.
      **Right-click the .pkg → Open → Open**, or go to *System Settings → Privacy & Security* and click **Open Anyway**.
 6. Restart your DAW (Logic: it rescans Audio Units on launch).
@@ -83,6 +83,7 @@ the singer was from it.
 | zoom time / pitch | cmd+scroll or pinch / option+scroll · `+` `−` keys · **Fit** (F) |
 | scroll | scroll wheel or trackpad; drag in the overview strip at the bottom |
 | undo / redo | cmd+Z / shift+cmd+Z, or the toolbar buttons |
+| play / stop in ClaudeTune | Return, or **▶ Play** in the header |
 | switch tools | **1** Select · **2** Split · **3** Draw (or the toolbar) |
 | cut a note in two | Split tool, click where to cut (a dashed line previews it) |
 | join notes | select neighbours, press **M** (or **Merge**) |
@@ -114,12 +115,24 @@ surrounding pitch over ~40 ms at each end, so strokes don't jump.
 **Snap** in the toolbar chooses what a dragged note lands on: semitones, notes of the scale, or nothing.
 The ruler shows bars and beats from Logic's tempo once you've pressed play.
 
-**Hearing edits while Logic is stopped:** with **Audition** on, clicking a note loops it while the mouse
-is held, so you hear pitch changes as you drag. Click the ruler (or empty space) to place the cursor and
-press **Preview** (or Return) to play the edited vocal from there. A plug-in can't move Logic's playhead,
-so this plays inside ClaudeTune; pressing play in Logic always takes over. Logic only runs plug-ins on the
-**selected** track while stopped, so select the vocal track if the preview doesn't start (the status line
-tells you).
+**Playing in ClaudeTune (hearing just this vocal, with edits).** The **▶ Play** button in the header
+plays the captured vocal on its own, inside ClaudeTune, while Logic is stopped. It starts from the
+**teal marker** in the editor:
+
+* The teal marker follows Logic's playhead, so after you stop Logic, Play picks up where Logic stopped.
+* Click the editor's ruler to move the marker (or click empty space in the roll). Double-click the ruler
+  to play from that spot. Clicking the ruler while it plays jumps there.
+* Press **Return** to start or stop. **Space belongs to Logic**: Logic keeps that key for its own
+  transport even when the ClaudeTune window is in front, so Space always plays the whole song in Logic.
+* With **Audition** on, holding the mouse on a note loops just that note, so you hear changes as you drag.
+* When Logic plays, it takes over: ClaudeTune's Play steps aside and you hear your edits in place in the
+  song. Logic's playhead is the white line; when it's parked somewhere other than the teal marker it shows
+  as a dashed line labelled "Logic".
+* Logic only runs plug-ins on the **selected** track while it's stopped. If Play doesn't move, the
+  header says "Select this track in Logic to hear it".
+
+The line under the piano roll always says what a click or drag would do where the mouse is, and the
+toolbar buttons have tooltips with their shortcuts.
 
 What ClaudeTune does on later passes:
 
