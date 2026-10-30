@@ -25,11 +25,10 @@ public:
         squares.assign ((size_t) maxLength + 1, 0.0);
     }
 
-    // x points to (window + tauMax) contiguous samples, oldest first.
-    // Returns the fractional period in samples; aperiodicity receives the
-    // normalised-difference value at that lag (0 = perfectly periodic).
-    float detect (const float* x, int window, int tauMin, int tauMax,
-                  float threshold, float& aperiodicity) noexcept
+    // Computes the cumulative-mean-normalised difference function for lags
+    // 0..tauMax. x points to (window + tauMax) contiguous samples. The result
+    // stays valid until the next call.
+    const float* computeCmndf (const float* x, int window, int tauMax) noexcept
     {
         const int length = window + tauMax;
         int n = 1;
@@ -75,6 +74,16 @@ public:
             cmndf[(size_t) tau] = running > 0.0 ? (float) (d * tau / running) : 1.0f;
         }
 
+        return cmndf.data();
+    }
+
+    // Classic YIN: returns the fractional period in samples; aperiodicity
+    // receives the normalised-difference value at that lag (0 = periodic).
+    float detect (const float* x, int window, int tauMin, int tauMax,
+                  float threshold, float& aperiodicity) noexcept
+    {
+        computeCmndf (x, window, tauMax);
+
         tauMin = std::max (tauMin, 2);
         int best = -1;
         for (int tau = tauMin; tau < tauMax; ++tau)
@@ -106,13 +115,18 @@ public:
         }
 
         aperiodicity = cmndf[(size_t) best];
+        return refineMinimum (best, tauMin, tauMax);
+    }
 
-        float period = (float) best;
-        if (best > tauMin && best < tauMax - 1)
+    // Parabolic interpolation around an integer minimum of the last CMNDF.
+    float refineMinimum (int tau, int tauMin, int tauMax) const noexcept
+    {
+        float period = (float) tau;
+        if (tau > tauMin && tau < tauMax - 1)
         {
-            const float a = cmndf[(size_t) best - 1];
-            const float b = cmndf[(size_t) best];
-            const float c = cmndf[(size_t) best + 1];
+            const float a = cmndf[(size_t) tau - 1];
+            const float b = cmndf[(size_t) tau];
+            const float c = cmndf[(size_t) tau + 1];
             const float den = a - 2.0f * b + c;
             if (std::abs (den) > 1e-9f)
                 period += std::clamp (0.5f * (a - c) / den, -1.0f, 1.0f);

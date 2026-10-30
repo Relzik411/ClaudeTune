@@ -1,38 +1,87 @@
-// Renders the ClaudeTune editor to a PNG while feeding the processor a
-// slightly sharp synthetic voice, so the meters and tuner show live values.
-// Development tool only (Linux CI / headless checks).
+// Renders the ClaudeTune editor to a PNG. Development tool only.
+//   ClaudeTuneSnapshot out.png            -> Live tab with a slightly sharp test voice
+//   ClaudeTuneSnapshot out.png edit       -> Edit tab after capturing a phrase + Correct All
+//   ClaudeTuneSnapshot out.png edit-empty -> Edit tab before anything is captured
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "TestSignals.h"
 
 #include <thread>
+
+struct SnapshotPlayHead : juce::AudioPlayHead
+{
+    std::atomic<juce::int64> time { 0 };
+    std::atomic<bool> playing { false };
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo p;
+        p.setIsPlaying (playing.load());
+        p.setTimeInSamples (time.load());
+        return p;
+    }
+};
 
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
     const juce::File out (argc > 1 ? juce::String (argv[1]) : juce::String ("claudetune_ui.png"));
+    const juce::String page (argc > 2 ? argv[2] : "live");
+    const double sr = 48000.0;
 
     ClaudeTuneProcessor proc;
-    proc.setPlayConfigDetails (2, 2, 48000.0, 512);
-    proc.prepareToPlay (48000.0, 512);
+    SnapshotPlayHead head;
+    proc.setPlayHead (&head);
+    proc.setPlayConfigDetails (1, 1, sr, 512);
+    proc.prepareToPlay (sr, 512);
 
     // a little customisation so the grid shows every note state
     proc.apvts.getParameter (ParamIDs::scale)->setValueNotifyingHost (proc.apvts.getParameter (ParamIDs::scale)->convertTo0to1 (1)); // Major
-    proc.cycleNoteState (66, false); // F# -> illegal up (from illegal)
-    proc.cycleNoteState (70, false);
-    proc.cycleNoteState (70, false); // A# -> illegal down
-    for (int i = 0; i < 4; ++i) proc.cycleNoteState (64, false); // E -> bypass
-    proc.apvts.getParameter (ParamIDs::vibratoOn)->setValueNotifyingHost (1.0f);
+    if (page == "live")
+    {
+        proc.cycleNoteState (66, false); // F# -> illegal up (from illegal)
+        proc.cycleNoteState (70, false);
+        proc.cycleNoteState (70, false); // A# -> illegal down
+        for (int i = 0; i < 4; ++i) proc.cycleNoteState (64, false); // E -> bypass
+        proc.apvts.getParameter (ParamIDs::vibratoOn)->setValueNotifyingHost (1.0f);
+    }
+
+    juce::MidiBuffer midi;
+    if (page.startsWith ("edit"))
+    {
+        proc.setMode (ClaudeTuneProcessor::Mode::Edit);
+        if (page == "edit")
+        {
+            // play a phrase that starts 1 s into the song, then correct it
+            const auto ph = testsig::makePhrase (sr);
+            std::vector<float> timeline ((size_t) sr, 0.0f);
+            timeline.insert (timeline.end(), ph.audio.begin(), ph.audio.end());
+            juce::AudioBuffer<float> buf (1, 512);
+            head.playing = true;
+            for (size_t pos = 0; pos + 512 <= timeline.size(); pos += 512)
+            {
+                for (int i = 0; i < 512; ++i) buf.setSample (0, i, timeline[pos + (size_t) i]);
+                head.time = (juce::int64) pos;
+                proc.processBlock (buf, midi);
+            }
+            head.playing = false;
+            buf.clear();
+            proc.processBlock (buf, midi);
+            proc.getSession().waitUntilIdle (20.0);
+            proc.correctAllNotes();
+            proc.getSession().waitUntilIdle (10.0);
+            head.time = (juce::int64) (3.3 * sr); // park the playhead mid-phrase
+            proc.processBlock (buf, midi);
+        }
+    }
 
     std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
     editor->setVisible (true);
 
-    std::atomic<bool> running { true };
+    std::atomic<bool> running { page == "live" };
     std::thread audio ([&] {
-        juce::AudioBuffer<float> buf (2, 512);
-        juce::MidiBuffer midi;
+        juce::AudioBuffer<float> buf (1, 512);
         double phase[40] = {};
-        const double sr = 48000.0;
         for (int block = 0; running; ++block)
         {
             for (int i = 0; i < 512; ++i)
@@ -46,9 +95,9 @@ int main (int argc, char** argv)
                     v += std::sin (phase[h]) / h;
                 }
                 buf.setSample (0, i, (float) (0.25 * v));
-                buf.setSample (1, i, (float) (0.25 * v));
             }
-            proc.processBlock (buf, midi);
+            juce::MidiBuffer m;
+            proc.processBlock (buf, m);
             std::this_thread::sleep_for (std::chrono::microseconds (2000));
         }
     });
@@ -56,7 +105,7 @@ int main (int argc, char** argv)
     juce::MessageManager::getInstance()->runDispatchLoopUntil (1500);
     running = false;
     audio.join();
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
 
     auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f);
     out.deleteFile();
@@ -66,5 +115,6 @@ int main (int argc, char** argv)
     std::printf ("%s %s (%dx%d)\n", ok ? "wrote" : "FAILED", out.getFullPathName().toRawUTF8(), img.getWidth(), img.getHeight());
 
     editor.reset();
+    proc.setPlayHead (nullptr);
     return ok ? 0 : 1;
 }

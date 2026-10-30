@@ -11,9 +11,21 @@ namespace
 
 //==============================================================================
 ClaudeTuneEditor::ClaudeTuneEditor (ClaudeTuneProcessor& p)
-    : AudioProcessorEditor (p), proc (p), keyboard (p)
+    : AudioProcessorEditor (p), proc (p), keyboard (p), editPage (p)
 {
     setLookAndFeel (&lnf);
+
+    for (auto* tab : { &liveTab, &editTab })
+    {
+        tab->setRadioGroupId (1001);
+        tab->setClickingTogglesState (false);
+        addAndMakeVisible (tab);
+    }
+    liveTab.onClick = [this] { proc.setMode (ClaudeTuneProcessor::Mode::Live); updateModeVisibility(); };
+    editTab.onClick = [this] { proc.setMode (ClaudeTuneProcessor::Mode::Edit); updateModeVisibility(); };
+    liveTab.setTooltip ("Live: real-time correction as the vocal plays");
+    editTab.setTooltip ("Edit: capture the vocal and edit its notes");
+    addChildComponent (editPage);
 
     setupKnob (speed, ParamIDs::speed);
     setupKnob (transition, ParamIDs::transition);
@@ -75,8 +87,15 @@ ClaudeTuneEditor::ClaudeTuneEditor (ClaudeTuneProcessor& p)
     addAndMakeVisible (outMeter);
     addAndMakeVisible (keyboard);
 
+    liveComponents = { &speed, &transition, &tolCents, &tolTime, &correction, &vibratoDepth, &refToneLevel, &refHz,
+                       &link, &correctionOn, &formant, &vibratoOn, &flats, &groupOctaves, &refTone, &targetPitch,
+                       &resetScale, &root, &scale, &tuner, &inMeter, &outMeter, &keyboard };
+    for (auto& b : rangeButtons)
+        liveComponents.push_back (&b);
+
     setSize (kWidth, kHeight);
     refreshRootNames();
+    updateModeVisibility();
     startTimerHz (30);
 }
 
@@ -152,9 +171,26 @@ void ClaudeTuneEditor::refreshRootNames()
     lastFlats = useFlats;
 }
 
+void ClaudeTuneEditor::updateModeVisibility()
+{
+    showingEdit = proc.getMode() == ClaudeTuneProcessor::Mode::Edit;
+    for (auto* comp : liveComponents)
+        comp->setVisible (! showingEdit);
+    editPage.setVisible (showingEdit);
+    liveTab.setToggleState (! showingEdit, juce::dontSendNotification);
+    editTab.setToggleState (showingEdit, juce::dontSendNotification);
+    repaint();
+}
+
 //==============================================================================
 void ClaudeTuneEditor::timerCallback()
 {
+    if ((proc.getMode() == ClaudeTuneProcessor::Mode::Edit) != showingEdit)
+        updateModeVisibility(); // e.g. changed by a preset or the host
+
+    if (showingEdit)
+        editPage.refresh();
+
     auto& t = proc.getTelemetry();
     inMeter.setLevel (t.inputPeak.exchange (0.0f));
     outMeter.setLevel (t.outputPeak.exchange (0.0f));
@@ -195,6 +231,11 @@ void ClaudeTuneEditor::timerCallback()
         latencyText = "latency " + juce::String (1000.0 * latency / sr, 1) + " ms";
         repaint();
     }
+    if (showingEdit && latencyText != "latency 0.0 ms")
+    {
+        latencyText = "latency 0.0 ms";
+        repaint();
+    }
 }
 
 //==============================================================================
@@ -225,9 +266,11 @@ void ClaudeTuneEditor::paint (juce::Graphics& g)
         g.drawText ("ClaudeTune", header.withTrimmedLeft (46), Justification::centredLeft);
         g.setColour (C::textDim);
         g.setFont (ui::font (12.5f));
-        g.drawText ("real-time pitch correction", header.withTrimmedLeft (172), Justification::centredLeft);
-        g.drawText (latencyText + "   v1.0", header, Justification::centredRight);
+        g.drawText (latencyText + "   v2 preview", header, Justification::centredRight);
     }
+
+    if (showingEdit)
+        return;
 
     for (auto& r : panels)
     {
@@ -258,6 +301,10 @@ void ClaudeTuneEditor::resized()
     panels.clear();
     captions.clear();
     auto caption = [this] (juce::String t, R area, bool title = false) { captions.push_back ({ std::move (t), area, title }); };
+
+    liveTab.setBounds (196, 11, 74, 28);
+    editTab.setBounds (274, 11, 74, 28);
+    editPage.setBounds (0, 56, kWidth, kHeight - 56);
 
     // --- top-left: timing ----------------------------------------------------
     const R timing (16, 56, 330, 296);

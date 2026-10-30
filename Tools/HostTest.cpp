@@ -143,6 +143,104 @@ int main (int argc, char** argv)
         inst->releaseResources();
     }
 
+    // ---- Edit mode through the VST3 interface -----------------------------------
+    {
+        struct HostPlayHead : juce::AudioPlayHead
+        {
+            juce::int64 time = 0;
+            bool playing = false;
+            juce::Optional<PositionInfo> getPosition() const override
+            {
+                PositionInfo p;
+                p.setIsPlaying (playing);
+                p.setTimeInSamples (time);
+                return p;
+            }
+        };
+
+        const double sr = 48000.0;
+        const int block = 512;
+        const int total = (int) (sr * 3.0);
+        juce::AudioBuffer<float> vocal (2, total);
+        double phase = 0.0;
+        for (int i = 0; i < total; ++i)
+        {
+            const double t = i / sr;
+            const double f0 = 220.0 * std::pow (2.0, (t < 1.5 ? 0.3 : 3.2) / 12.0);
+            phase += 2 * juce::MathConstants<double>::pi * f0 / sr;
+            double v = 0;
+            for (int h = 1; h < 20; ++h) v += std::sin (h * phase) / h;
+            const double env = (t > 0.3 && t < 2.8) ? 0.25 : 0.0;
+            vocal.setSample (0, i, (float) (env * v));
+            vocal.setSample (1, i, (float) (env * v));
+        }
+
+        auto playThrough = [&] (juce::AudioPluginInstance& p, HostPlayHead& head) {
+            juce::AudioBuffer<float> out (vocal);
+            juce::MidiBuffer midi;
+            head.playing = true;
+            for (int pos = 0; pos < total; pos += block)
+            {
+                const int n = juce::jmin (block, total - pos);
+                juce::AudioBuffer<float> blk (out.getArrayOfWritePointers(), 2, pos, n);
+                head.time = pos;
+                p.processBlock (blk, midi);
+            }
+            head.playing = false;
+            return out;
+        };
+        auto setMode = [] (juce::AudioPluginInstance& p, float v) {
+            for (auto* prm : p.getParameters())
+                if (prm->getName (32) == "Mode") { prm->setValueNotifyingHost (v); return true; }
+            return false;
+        };
+        auto pump = [] (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); };
+
+        juce::String err;
+        auto inst = format.createInstanceFromDescription (d, sr, block, err);
+        HostPlayHead head;
+        inst->setPlayHead (&head);
+        inst->enableAllBuses();
+        inst->setPlayConfigDetails (2, 2, sr, block);
+        inst->prepareToPlay (sr, block);
+        const bool found = setMode (*inst, 1.0f);
+        { juce::AudioBuffer<float> b (2, block); b.clear(); juce::MidiBuffer m; inst->processBlock (b, m); }
+        pump (200);
+        check (found && inst->getLatencySamples() == 0, "Edit mode via VST3: latency " + juce::String (inst->getLatencySamples()));
+
+        const auto first = playThrough (*inst, head);
+        float diff = 0.0f;
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < total; ++i)
+                diff = std::max (diff, std::abs (first.getSample (c, i) - vocal.getSample (c, i)));
+        pump (1500); // background analysis
+        juce::MemoryBlock state;
+        inst->getStateInformation (state);
+        check (diff == 0.0f && state.getSize() > 50000,
+               "VST3 capture pass is untouched and saved with the project (" + juce::String ((int) state.getSize() / 1024) + " KB)");
+
+        auto other = format.createInstanceFromDescription (d, sr, block, err);
+        HostPlayHead head2;
+        other->setPlayHead (&head2);
+        other->setStateInformation (state.getData(), (int) state.getSize());
+        other->enableAllBuses();
+        other->setPlayConfigDetails (2, 2, sr, block);
+        other->prepareToPlay (sr, block);
+        pump (1500);
+        juce::MemoryBlock state2;
+        other->getStateInformation (state2);
+        const auto replay = playThrough (*other, head2);
+        float diff2 = 0.0f;
+        for (int i = 0; i < total; ++i)
+            diff2 = std::max (diff2, std::abs (replay.getSample (0, i) - vocal.getSample (0, i)));
+        check (state2 == state && diff2 == 0.0f, "VST3 project reload restores the capture exactly");
+
+        other->releaseResources();
+        inst->releaseResources();
+        other->setPlayHead (nullptr);
+        inst->setPlayHead (nullptr);
+    }
+
     std::printf ("\n%s (%d failures)\n", failures == 0 ? "HOST TEST PASSED" : "HOST TEST FAILED", failures);
     return failures == 0 ? 0 : 1;
 }

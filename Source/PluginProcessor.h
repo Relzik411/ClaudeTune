@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Engine/TuneEngine.h"
+#include "Edit/EditSession.h"
 
 #include <array>
 #include <atomic>
@@ -28,6 +29,13 @@ namespace ParamIDs
     inline constexpr const char* refTone        = "refTone";
     inline constexpr const char* targetPitch    = "targetPitch";
     inline constexpr const char* refToneLevel   = "refToneLevel";
+
+    // Edit mode
+    inline constexpr const char* mode           = "mode";          // 0 = Live, 1 = Edit
+    inline constexpr const char* editCenter     = "editCenter";    // Correct All: centre amount (%)
+    inline constexpr const char* editVariation  = "editVariation"; // Correct All: variation kept (%)
+    inline constexpr const char* editBypass     = "editBypass";    // hear the original
+    inline constexpr const char* editLock       = "editLock";      // stop capturing
 }
 
 class ClaudeTuneProcessor : public juce::AudioProcessor,
@@ -35,6 +43,8 @@ class ClaudeTuneProcessor : public juce::AudioProcessor,
                             private juce::AsyncUpdater
 {
 public:
+    enum class Mode { Live = 0, Edit = 1 };
+
     ClaudeTuneProcessor();
     ~ClaudeTuneProcessor() override;
 
@@ -71,7 +81,20 @@ public:
     int getNoteStateVersion() const noexcept { return noteStateVersion.load(); }
 
     claudetune::EngineTelemetry& getTelemetry() noexcept { return engine.telemetry; }
-    int getReportedLatency() const noexcept { return engine.telemetry.latency.load(); }
+    int getReportedLatency() const noexcept { return desiredLatency.load(); }
+
+    //==========================================================================
+    // Edit mode
+    Mode getMode() const noexcept { return raw.mode->load() > 0.5f ? Mode::Edit : Mode::Live; }
+    void setMode (Mode m);
+    claudetune::edit::EditSession& getSession() noexcept { return session; }
+    // Snaps captured notes (all, or just the given ids) to the Live tab's key/scale,
+    // with the Edit tab's Center/Variation.
+    void correctAllNotes (const std::vector<uint32_t>& onlyThese = {});
+    juce::String describeScale() const;
+    std::array<bool, 128> getAllowedNotes() const;   // legal (or bypassed) notes of the Live tab's scale
+    float getReferenceOffset() const;                 // semitones from A4 = 440 Hz
+    bool usesFlats() const;
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -81,12 +104,21 @@ private:
     void handleAsyncUpdate() override;
     void rebuildScale();
     claudetune::EngineParams readParams() const;
+    juce::ValueTree buildParameterState();
+    void restoreParameterState (const juce::ValueTree& state);
 
     claudetune::TuneEngine engine;
+    claudetune::edit::EditSession session;
     std::array<std::atomic<uint8_t>, 128> noteStates;
     std::atomic<bool> scaleModified { false };
     std::atomic<int> noteStateVersion { 0 };
+    std::atomic<int> desiredLatency { 0 };
     int lastLatency = -1;
+    bool wasEditMode = false;
+
+    // the compressed capture is cached between saves
+    juce::MemoryBlock cachedAudioBlob;
+    uint64_t cachedAudioRevision = 0;
 
     struct Raw
     {
@@ -105,6 +137,9 @@ private:
         std::atomic<float>* refTone {};
         std::atomic<float>* targetPitch {};
         std::atomic<float>* refToneLevel {};
+        std::atomic<float>* mode {};
+        std::atomic<float>* editBypass {};
+        std::atomic<float>* editLock {};
     } raw;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ClaudeTuneProcessor)

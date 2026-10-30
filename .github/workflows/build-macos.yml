@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write   # lets the release step attach the installer
 
 jobs:
   macos:
@@ -28,10 +28,13 @@ jobs:
       - name: Build
         run: |
           cmake --build build --config Release -j 4 \
-            --target ClaudeTune_VST3 ClaudeTune_AU ClaudeTune_Standalone ClaudeTuneEngineTests
+            --target ClaudeTune_VST3 ClaudeTune_AU ClaudeTune_Standalone ClaudeTuneEngineTests ClaudeTuneEditTests ClaudeTuneSessionTests
 
       - name: Run engine tests
-        run: ./build/ClaudeTuneEngineTests
+        run: |
+          ./build/ClaudeTuneEngineTests
+          ./build/ClaudeTuneEditTests
+          ./build/ClaudeTuneSessionTests
 
       - name: Collect and sign bundles (ad-hoc)
         run: |
@@ -55,7 +58,7 @@ jobs:
 
       - name: Build installer (.pkg)
         run: |
-          VERSION=1.0.0
+          VERSION=1.9.0
           chmod +x packaging/mac/scripts/postinstall
           pkgbuild --root stage/vst3 --install-location /Library/Audio/Plug-Ins/VST3 \
                    --identifier com.claudetune.ClaudeTune.vst3 --version $VERSION ClaudeTune-VST3.pkg
